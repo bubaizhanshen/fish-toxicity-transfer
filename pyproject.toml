@@ -3,28 +3,18 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "fish-toxicity-transfer"
-version = "0.1.0"
-description = "High-effect data reuse for fish low-effect concentration prediction"
+name = "fish-growth-qsar"
+version = "0.2.0"
+description = "Mortality QSAR transfer for fish growth NOEC prediction"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = [
-    "numpy>=1.26,<3",
-    "pandas>=2.2,<3",
-    "scipy>=1.13,<2",
-    "scikit-learn>=1.6,<1.8",
-    "joblib>=1.4,<2",
-    "lightgbm>=4.6,<5",
-]
+dependencies = ["numpy>=1.26,<3", "pandas>=2.2,<3"]
 
 [project.optional-dependencies]
-mlp = ["scikit-learn>=1.7,<1.8"]
-boosting = ["xgboost>=3,<4", "catboost>=1.2,<2"]
-embeddings = ["torch>=2.5,<3", "transformers>=4.45,<5"]
-foundation = ["torch>=2.5,<3", "tabpfn==2.0.9"]
+source = ["scipy>=1.13,<2", "scikit-learn>=1.6,<1.8", "lightgbm>=4.6,<5"]
 
 [project.scripts]
-fish-toxicity = "fish_toxicity.cli:main"
+fish-growth = "fish_growth_qsar.predict:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

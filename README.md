@@ -1,105 +1,132 @@
-# Fish toxicity transfer
+# Fish growth QSAR
 
-Core code for evaluating whether high-effect fish mortality data improve prediction of low-effect concentrations when target labels are limited.
+Core analysis code for **Transfer Learning from Mortality QSARs Improves Fish
+Growth Toxicity Prediction**.
 
-The comparison includes target-only training, joint training, and residual calibration of a source model. Chemical groups are held out together, including their source observations during inner validation. Configurations and model families are selected using out-of-fold target error.
+The method fits a fish mortality QSAR, obtains chemical-level cross-fitted
+predictions for growth-training compounds, and estimates an intercept from
+growth no-observed-effect concentrations (NOECs). Each training chemical receives
+equal total weight. Prediction for an untested chemical uses its mortality QSAR
+estimate plus this intercept. Concentrations are expressed as log10(mg/L).
 
 ## Install
 
 ```bash
 python -m pip install -e .
-# Optional model families:
-python -m pip install -e '.[boosting,embeddings,mlp]'
-# Run TabPFN in a separate environment:
-python -m pip install -e '.[foundation]'
 ```
 
-Python 3.10 or later is required. MLP training requires scikit-learn 1.7. TabPFN 2.0.9 requires scikit-learn below 1.7, so use a separate environment for that comparator and the v2 regressor checkpoint. Obtain pretrained checkpoints separately under their respective terms. Numerical results can vary with dependency versions.
-
-## Inputs
-
-This repository contains code only. The observations originate from [TRIDENT](https://doi.org/10.1126/sciadv.adk6669) and [ADORE](https://doi.org/10.1038/s41597-023-02612-2). Raw releases require harmonization; they cannot be passed directly to the training commands. The code consumes the study's prepared inputs, with this layout:
-
-```text
-data/
-  EVALUATED_ENDPOINTS.csv
-  descriptors/chemical_ecfp_radius2_2048.npz
-  split_0/
-    records.csv.gz
-    LOW_SELECTION.csv
-  ...
-  split_5/
-  tasks/task_00/INNER_FOLDS.csv
-  ...
-  tasks/task_35/INNER_FOLDS.csv
-```
-
-If you have the local numerical archive, copy its required inputs with:
+Python 3.10 or later is required. To fit the mortality model, also install:
 
 ```bash
-fish-toxicity import-inputs /path/to/numerical_archive data
+python -m pip install -e '.[source]'
 ```
 
-The processed inputs and model checkpoints are not distributed here. Exact numerical reproduction requires the original partitions, selections, descriptor matrix, and checkpoints; this refactoring has not been rerun as a full experimental benchmark.
+## Reproduce growth calibration
 
-**Record fields.** `record_id`, `tax_group`, `chemical_index`, `structure_key`, `group`, `split`, `endpoint_class`, `endpoint_key`, `effect`, `endpoint_type`, `species`, `duration_h`, and `value_for_model` are required. `chemical_index` indexes the fingerprint matrix (radius 2, 2,048 bits). `group` connects equivalent structures and shared chemical identifiers. `split` is `train`, `val`, or `test`; the outer validation partition is unused. Use the released log10(mg/L) response in `value_for_model`, not a recalculation from rounded linear concentrations.
-
-**Effect levels.** The legacy input strings `acute` and `chronic` mean source high-effect and target low-effect records, respectively. They do not specify exposure duration. The target code pools NOEC and 0–10% effects; predictions are not uniformly EC10 values or protective concentrations. `endpoint_key` combines taxonomic group, biological effect, endpoint code, and duration bin. Legacy duration labels have boundaries at 24, 48, 96, 168, and 720 hours.
-
-**Selections and folds.** `LOW_SELECTION.csv` contains `record_id` and `shot_rank`: budget K selects up to K chemical groups per target context, one record per group and context. `EVALUATED_ENDPOINTS.csv` contains `tax_group` and `endpoint_key`. Each fold file contains `record_id` and `inner_fold` (0, 1, or 2). Task numbering is `6 * split + 2 * budget_index + species`, where budget indices 0–2 mean K = 5, 20, 100 and species is 0 or 1.
-
-## Train and compare
+The prepared inputs are in `model_inputs` in Supporting Data S1. Each
+dataset/partition directory contains `TRAIN.csv.gz`, `QUERY_METADATA.csv.gz`,
+`EXACT_INPUTS.npz`, and `CHOICES.csv.gz`. The arrays contain chemically excluded
+source predictions and preserve full-precision values. `benchmark`, `fels`, and
+`japan` refer to the broad, historical, and Japanese evaluations.
 
 ```bash
-fish-toxicity benchmark --inputs data --output results/lgbm-s0-k5 \
-  --family lgbm --split 0 --budget 5
-
-fish-toxicity benchmark --inputs data --output results/rf-s0-k5 \
-  --family rf --split 0 --budget 5
-
-fish-toxicity select results/lgbm-s0-k5 results/rf-s0-k5 \
-  --mode joint --output results/selected-s0-k5
+fish-growth --inputs data/model_inputs/benchmark_split_0 \
+  --split 0 --budget 20 --repeat 0 --output results/predictions.csv
 ```
 
-Add `--species` to include species as an input. Run each family separately for the six partitions and three budgets. Selection is separate for target-only (`low`) and joint training (`joint`); pass all intended family folders with the same condition to `select`. Existing output directories are not overwritten. Each run writes out-of-fold scores, held-out predictions, the selected configuration, and fitted model components.
+Use `--regime one_record` for the frozen selection of one growth record per
+chemical at budgets 5 or 20. The all-record regime supports budgets 5, 20, 80,
+and `ALL`. Restricted budgets have ten selections (`--repeat 0` through `9`);
+`ALL` uses repeat 0. Apply the command separately to each of six partitions and
+three datasets.
 
-Available families:
+The command writes predictions and a JSON summary of the fitted intercept and
+training counts. It reads cached source predictions, so it does not require a
+LightGBM refit or a foundation-model checkpoint.
 
-- `lgbm`, `rf`, `ridge`, `elastic_net`, `linear_svr`, `nystroem_ridge`
-- `knn`, `extra_trees`, `xgboost`, `catboost`, `mlp`, `chemberta_lgbm`
-- `rbf_svr_low` and `tabpfn_low` (target-only comparators)
+## Fit the mortality source model
 
-The molecular embedding model uses the frozen `seyonec/PubChem10M_SMILES_BPE_450k` encoder and CLS features, not fine-tuning. Supply an index-aligned `.npy` matrix through `--embeddings`, or create one from a CSV containing `chemical_index` and `smiles`:
+`source.cross_fitted_mortality` implements source training and threefold chemical
+cross-fitting. It accepts curated source, growth-training, and query records,
+a molecular-property table, and a sparse Morgan fingerprint matrix. Molecular
+features are prepared before calling it.
 
-```bash
-N_ROWS=$(python -c "from scipy import sparse; print(sparse.load_npz('data/descriptors/chemical_ecfp_radius2_2048.npz').shape[0])")
-fish-toxicity encode --molecules data/molecules.csv --checkpoint models/chemberta \
-  --matrix-rows "$N_ROWS" --output data/embeddings.npy
+```python
+from fish_growth_qsar import InterceptCalibration
+from fish_growth_qsar.source import cross_fitted_mortality
+
+m_train, m_query, source_model = cross_fitted_mortality(
+    source_records, growth_records, query_records,
+    properties, fingerprints, descriptor_names,
+    split=0, excluded_parents=held_out_candidates,
+)
+calibration = InterceptCalibration.fit(
+    growth_records.value_for_model, m_train, growth_records.parent_group
+)
+predictions = calibration.predict_log_concentration(m_query)
 ```
 
-The encoder uses the first token of the final hidden layer and a 100-token maximum. Use the study checkpoint for comparison with reported results. For `tabpfn_low`, pass `--checkpoint models/tabpfn-v2-regressor.ckpt`.
+Supply the full permitted growth-training pool for cross-fitting, then apply the
+desired label selection when fitting `InterceptCalibration`. This preserves the
+separation between source fitting and growth-data budgets.
 
-## Calibration and evaluation
+The record schema uses `record_id`, `parent_group`, `group`, `chemical_index`,
+`structure_key`, `effect`, `endpoint_type`, `duration_h`, and `value_for_model`.
+Query records need only identifiers and feature indices. `parent_group` links
+aliases of a standardized chemical; `group` indexes the reported structure in
+the property table; `chemical_index` indexes fingerprint rows. Source records
+are fish mortality LC50/EC50 observations. Growth labels must be explicitly
+recovered GRO/NOEC records. Held-out candidates must be excluded from both
+training pools before fitting.
 
-```bash
-fish-toxicity calibrate --inputs data --split 0 --output results/calibration-s0
+The fingerprint is radius 2 with 2048 bits. The 13 properties, in the supplied
+order, are parent logP, parent molecular weight, reported-structure molecular
+weight, topological polar surface area, hydrogen-bond donors and acceptors,
+ring count, aromatic-ring count, sp3-carbon fraction, rotatable bonds,
+original-organic-component formal charge, heteroatoms, and heavy atoms.
+Species is not a model input. Source rows retain their exposure durations;
+queries use mortality LC50 at 96 h.
 
-fish-toxicity evaluate \
-  --predictions results/lgbm-s0-k5/joint_predictions.csv.gz \
-  --baseline results/lgbm-s0-k5/low_predictions.csv.gz \
-  --output results/comparison-s0-k5
+Observations originate from the [ECOTOX Knowledgebase](https://cfpub.epa.gov/ecotox/)
+and the [TRIDENT release](https://doi.org/10.1126/sciadv.adk6669), with external
+growth records described in the manuscript. Raw releases require endpoint,
+identity, and unit harmonization. Use the supplied memberships and prepared
+features for the reported analysis. Cached predictions provide the direct route
+to reproducing the released calibration; numerical refits can vary with library
+versions. No pretrained model checkpoint is distributed here.
+
+## Evaluate predictions
+
+`metrics.performance` calculates MAE, signed error, and large-error frequencies.
+`metrics.comparisons` calculates paired differences using shared chemical
+Bayesian-bootstrap weights. Input tables use `split`, `repeat`, `endpoint_key`,
+`group`, `parent_group`, `record_id`, and observed `value_for_model`, plus one
+prediction column per model.
+
+```python
+from fish_growth_qsar.metrics import performance, comparisons
+
+scores = performance(predictions_table, models=["calibration", "direct"], seed=42)
+contrasts = comparisons(
+    predictions_table, primary="calibration", references=["direct"], seed=42
+)
 ```
 
-Calibration uses a fixed source LightGBM model and target residual medians, with global or context-specific corrections (shrinkage strength 5). It evaluates nested budgets of 1, 2, 5, 10, 20, 50, and 100. This control uses in-sample source predictions for calibration chemicals, not cross-fitted residuals.
-
-Evaluation averages records within structure and context, then contexts and partitions equally. Metrics are log10-concentration MAE, the fraction within tenfold, and the fractions underestimating or overestimating potency by more than tenfold. A positive concentration error underestimates potency. Paired intervals report candidate minus baseline; a negative MAE difference favors the candidate. To evaluate all partitions, pass all six prediction files to each argument. The bootstrap resamples chemical structures jointly across partitions and conditions on fitted models and label selections.
+Run metrics separately for each dataset and training budget. Records are averaged
+within chemical and endpoint group, with equal weighting of endpoint groups and
+training contexts. The simultaneous limits in `comparisons` use the six-comparison
+family specified in the paper; pointwise limits are also returned. Intervals
+condition on fitted models and selections. Positive concentration error indicates
+underestimated growth toxicity.
 
 ## Code layout
 
-- `data.py`: input loading and chemical-group separation
-- `features.py`: preprocessing fitted on training rows
-- `models.py`, `representations.py`: regression grids and optional pretrained models
-- `benchmark.py`: inner validation, refitting, and family selection
-- `calibration.py`: source-model residual corrections
-- `metrics.py`: balanced metrics and paired intervals
-- `cli.py`: command-line interface
+| Module | Purpose |
+|---|---|
+| `source.py` | Mortality LightGBM and chemical-level cross-fitting |
+| `calibration.py` | Equal-chemical mean residual and calibrated prediction |
+| `predict.py` | Calibration using released inputs and label selections |
+| `metrics.py` | Original primary weighting, errors, and paired intervals |
+
+This version targets growth NOEC. The earlier mixed-endpoint implementation
+remains in Git history.
