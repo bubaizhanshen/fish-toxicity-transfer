@@ -19,6 +19,13 @@ def main():
     parser.add_argument('--regime', choices=['all_records', 'one_record'], default='all_records')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
+    scope_path = args.inputs / 'FROZEN_SCOPE.json'
+    if scope_path.exists():
+        scope = json.loads(scope_path.read_text())
+        if args.regime not in scope['regimes'] or args.budget not in scope['budgets']:
+            raise ValueError('These prepared inputs support only the listed frozen one-record selections.')
+        if args.split != scope['split']:
+            raise ValueError('Requested partition differs from the input scope.')
     with np.load(args.inputs / 'EXACT_INPUTS.npz') as source:
         arrays = {key: source[key] for key in source.files}
     train = pd.read_csv(args.inputs / 'TRAIN.csv.gz', dtype={'record_id': str})

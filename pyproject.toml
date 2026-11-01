@@ -15,6 +15,8 @@ source = ["scipy>=1.13,<2", "scikit-learn>=1.6,<1.8", "lightgbm>=4.6,<5"]
 
 [project.scripts]
 fish-growth = "fish_growth_qsar.predict:main"
+fish-growth-external = "fish_growth_qsar.external:main"
+fish-growth-baselines = "fish_growth_qsar.baselines:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

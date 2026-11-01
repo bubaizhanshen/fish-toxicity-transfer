@@ -1,7 +1,6 @@
 # Fish growth QSAR
 
-Core analysis code for **Transfer Learning from Mortality QSARs Improves Fish
-Growth Toxicity Prediction**.
+Core analysis code for **Beyond Lethality: Using Mortality QSARs to Predict Fish Growth Toxicity**.
 
 The method fits a fish mortality QSAR, obtains chemical-level cross-fitted
 predictions for growth-training compounds, and estimates an intercept from
@@ -23,26 +22,23 @@ python -m pip install -e '.[source]'
 
 ## Reproduce growth calibration
 
-The prepared inputs are in `model_inputs` in Supporting Data S1. Each
-dataset/partition directory contains `TRAIN.csv.gz`, `QUERY_METADATA.csv.gz`,
-`EXACT_INPUTS.npz`, and `CHOICES.csv.gz`. The arrays contain chemically excluded
-source predictions and preserve full-precision values. `benchmark`, `fels`, and
-`japan` refer to the broad, historical, and Japanese evaluations.
+The prepared `model_inputs` in Supporting Data S1 contain the frozen
+one-record selections for five or twenty growth-training chemicals. For the
+affected source fits, selected cross-fitted predictions and test predictions
+reflect the corrected source records. These inputs support only the supplied
+one-record selections; unselected training positions are not usable for
+all-record calibration.
 
 ```bash
-fish-growth --inputs data/model_inputs/benchmark_split_0 \
-  --split 0 --budget 20 --repeat 0 --output results/predictions.csv
+fish-growth --inputs data/model_inputs/fels_split_1 \
+  --split 1 --budget 20 --repeat 0 --regime one_record \
+  --output results/predictions.csv
 ```
 
-Use `--regime one_record` for the frozen selection of one growth record per
-chemical at budgets 5 or 20. The all-record regime supports budgets 5, 20, 80,
-and `ALL`. Restricted budgets have ten selections (`--repeat 0` through `9`);
-`ALL` uses repeat 0. Apply the command separately to each of six partitions and
-three datasets.
-
-The command writes predictions and a JSON summary of the fitted intercept and
-training counts. It reads cached source predictions, so it does not require a
-LightGBM refit or a foundation-model checkpoint.
+Use `--budget 5` or `--budget 20` and `--repeat 0` through `9`. Apply the
+command separately to each of six partitions and three datasets. The command
+writes predictions and the fitted intercept; it reads cached source predictions
+and does not refit LightGBM.
 
 ## Fit the mortality source model
 
@@ -119,6 +115,32 @@ family specified in the paper; pointwise limits are also returned. Intervals
 condition on fitted models and selections. Positive concentration error indicates
 underestimated growth toxicity.
 
+## Evaluate an external test set
+
+Supporting Data S1 contains `figure_data/external_growth_predictions.csv`,
+with observations and predictions for the same external records and fits.
+To reproduce the chemical-weighted performance and paired MAE comparisons:
+
+```bash
+fish-growth-external data/figure_data/external_growth_predictions.csv --output-dir results/external
+```
+
+These are conditional comparisons of the supplied predictions. Reproducing the
+model fits additionally requires the curated inputs and the saved split selections.
+
+The external growth-only random forest and kernel ridge comparators can be
+refitted using the prepared 20-record selections and 95-dimensional features:
+
+```bash
+fish-growth-baselines data/external_baselines/split_0 --output results/baselines_0.csv
+```
+
+The 64 fingerprint components are fitted on source-training structures without
+external-test chemicals; the remaining inputs comprise 13 descriptors, log10
+duration and 17 structural indicators. These are prepared model inputs. The data
+archive does not contain all inputs needed to refit the other comparators or the
+mortality source models.
+
 ## Code layout
 
 | Module | Purpose |
@@ -127,6 +149,8 @@ underestimated growth toxicity.
 | `calibration.py` | Equal-chemical mean residual and calibrated prediction |
 | `predict.py` | Calibration using released inputs and label selections |
 | `metrics.py` | Original primary weighting, errors, and paired intervals |
+| `external.py` | Chemical-weighted external metrics and paired intervals |
+| `baselines.py` | External growth-only random forest and kernel ridge comparators |
 
 This version targets growth NOEC. The earlier mixed-endpoint implementation
 remains in Git history.
