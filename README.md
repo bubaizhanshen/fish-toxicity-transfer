@@ -137,9 +137,30 @@ fish-growth-baselines data/external_baselines/split_0 --output results/baselines
 
 The 64 fingerprint components are fitted on source-training structures without
 external-test chemicals; the remaining inputs comprise 13 descriptors, log10
-duration and 17 structural indicators. These are prepared model inputs. The data
-archive does not contain all inputs needed to refit the other comparators or the
-mortality source models.
+duration and 17 structural indicators.
+
+To refit the mortality source model, cross-fitted growth calibration, growth-only
+LightGBM, and the two joint LightGBM comparators for the external set:
+
+```bash
+fish-growth-source data/external_joint/split_0 --output-dir results/source_0
+fish-growth-joint data/external_joint/split_0 --output results/joint_0.csv
+```
+
+The `external_joint` folders contain the prepared source, selected growth, and
+query feature matrices, training labels and weights, chemical identifiers, and
+the saved growth-parent fold assignments. The 20 selected growth records are
+the same for all external comparators in each fit. The source model uses the
+2048 fingerprint bits, 13 molecular descriptors, duration and endpoint fields;
+the joint models also use the 17 structural indicators. For the mortality model,
+each query uses the 96 h LC50 setting. These inputs do not contain all features
+needed to refit every model for every original evaluation selection; the TabPFN
+checkpoint is not distributed here.
+
+The refits were checked with NumPy 2.3.1, pandas 2.3.2, SciPy 1.16.0,
+scikit-learn 1.7.1, and LightGBM 4.6.0. The column-contiguous layout in
+`prepared_mortality.py` matches the original scaler calculation; different
+versions or numerical libraries may produce different fitted trees.
 
 ## Code layout
 
@@ -151,6 +172,8 @@ mortality source models.
 | `metrics.py` | Original primary weighting, errors, and paired intervals |
 | `external.py` | Chemical-weighted external metrics and paired intervals |
 | `baselines.py` | External growth-only random forest and kernel ridge comparators |
+| `prepared_mortality.py` | Mortality source refits and external growth calibration |
+| `joint.py` | Growth-only and joint LightGBM comparators for the external set |
 
 This version targets growth NOEC. The earlier mixed-endpoint implementation
 remains in Git history.
